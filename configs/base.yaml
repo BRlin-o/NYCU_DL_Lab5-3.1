@@ -47,7 +47,7 @@ per:
   beta_final: 1.0
   beta_steps: 1000000
   buffer_size: 400000
-  min_priority: 1e-6
+  min_priority: 0.000001
 
 # Double DQN
 double_dqn:
