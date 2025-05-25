@@ -109,12 +109,32 @@ def check_cuda_support():
         print("   Training will use CPU (much slower)")
         return False
 
+def create_virtual_environment():
+    """Create a virtual environment"""
+    print("\n🔧 Creating virtual environment...")
+    
+    venv_path = ".venv"
+    
+    # Check if venv already exists
+    if os.path.exists(venv_path):
+        print(f"   ⚠️ Virtual environment already exists at {venv_path}")
+        return True, venv_path
+    
+    # Create virtual environment
+    try:
+        subprocess.run([sys.executable, '-m', 'venv', venv_path], check=True)
+        print(f"✅ Virtual environment created at {venv_path}")
+        return True, venv_path
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to create virtual environment: {e}")
+        return False, None
+
 def install_pytorch_cuda():
     """Install PyTorch with CUDA support"""
     print("\n🔥 Installing PyTorch with CUDA support...")
     
     # Detect CUDA version or use default
-    cuda_version = "cu118"  # Default to CUDA 11.8
+    cuda_version = "cu126"  # Default to CUDA 11.8
     
     try:
         result = subprocess.run(['nvidia-smi'], capture_output=True, text=True)
@@ -122,20 +142,20 @@ def install_pytorch_cuda():
             # Try to parse CUDA version from nvidia-smi
             output = result.stdout
             if "CUDA Version: 12." in output:
-                cuda_version = "cu121"
+                cuda_version = "cu126"
                 print("   Detected CUDA 12.x")
             elif "CUDA Version: 11.8" in output:
                 cuda_version = "cu118"
                 print("   Detected CUDA 11.8")
             else:
-                print("   Using default CUDA 11.8")
+                print("   Using default CUDA 12.6")
     except:
-        print("   Using default CUDA 11.8")
+        print("   Using default CUDA 12.6")
     
     # Install PyTorch
     cmd = [
         sys.executable, '-m', 'pip', 'install',
-        'torch', 'torchvision', 'torchaudio',
+        'torch', 'torchvision',
         '--index-url', f'https://download.pytorch.org/whl/{cuda_version}'
     ]
     
