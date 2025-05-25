@@ -1,0 +1,61 @@
+# Fast convergence configuration for RTX3090
+_base_: "base.yaml"
+
+experiment:
+  name: "rainbow_fast_convergence"
+  description: "Optimized for RTX3090, targeting fast convergence to 19 score"
+  tags: ["task3", "rainbow", "fast", "rtx3090"]
+
+# Aggressive training parameters for fast convergence
+training:
+  batch_size: 128          # 利用24G VRAM
+  lr: 5e-4                 # 更高學習率
+  train_frequency: 2       # 更頻繁訓練
+  gradient_clipping: 5.0   # 更嚴格梯度裁剪
+  
+  # 更激進的優化器設定
+  optimizer:
+    eps: 1e-4
+    weight_decay: 1e-6
+
+# 更快的探索衰減
+exploration:
+  epsilon_start: 1.0
+  epsilon_final: 0.05      # 稍高的最終探索率
+  epsilon_decay_steps: 200000  # 更快衰減
+
+# PER優化設定
+per:
+  alpha: 0.7               # 更強的優先級
+  beta_start: 0.5          # 更高起始β
+  beta_final: 1.0
+  beta_steps: 800000
+  buffer_size: 300000      # 較小buffer，更快採樣
+
+# 更頻繁的目標網路更新
+training:
+  target_update_freq: 6000
+
+# 更頻繁的評估
+evaluation:
+  eval_frequency: 15000    # 更頻繁評估
+  eval_episodes: 25        # 更多評估episode
+  save_videos: true
+
+# 更頻繁的記錄
+logging:
+  log_frequency: 500
+  checkpoint_frequency: 5000
+
+# 硬體優化
+hardware:
+  device: "cuda:0"         # RTX3090
+  mixed_precision: true    # 啟用混合精度
+  compile_model: true      # 啟用模型編譯(PyTorch 2.0)
+  num_workers: 8           # 更多worker
+
+# 早停設定
+early_stopping:
+  enabled: true
+  target_score: 19.0
+  patience_episodes: 50    # 更少耐心，快速停止

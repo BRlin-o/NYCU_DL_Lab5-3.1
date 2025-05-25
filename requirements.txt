@@ -1,0 +1,112 @@
+# Task 3 Enhanced DQN - Python Dependencies
+# Spring 2025, 535507 Deep Learning Lab 5
+
+# ===== Core Deep Learning Framework =====
+# torch>=2.0.0
+# ===== GPU Acceleration Support =====
+# Uncomment based on your CUDA version:
+# torch>=2.0.0+cu118 --index-url https://download.pytorch.org/whl/cu118  # CUDA 11.8
+torch>=2.0.0+cu126 --index-url https://download.pytorch.org/whl/cu126  # CUDA 12.6
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# ===== Reinforcement Learning Environment =====
+gymnasium>=0.29.0
+gymnasium[atari]>=0.29.0
+ale-py>=0.8.1
+
+# ===== Computer Vision & Image Processing =====
+opencv-python>=4.8.0
+Pillow>=9.5.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.8
+
+# ===== Scientific Computing =====
+numpy>=1.21.0,<1.25.0  # Compatibility with gymnasium
+scipy>=1.9.0
+pandas>=1.5.0
+
+# ===== Experiment Tracking & Monitoring =====
+wandb>=0.15.0
+tensorboard>=2.13.0  # Optional alternative to W&B
+
+# ===== Visualization & Plotting =====
+matplotlib>=3.6.0
+seaborn>=0.12.0
+plotly>=5.15.0  # Optional for interactive plots
+
+# ===== System Monitoring =====
+psutil>=5.9.0
+GPUtil>=1.4.0
+
+# ===== Configuration & Utilities =====
+PyYAML>=6.0
+omegaconf>=2.3.0  # Optional advanced config management
+hydra-core>=1.3.0  # Optional with omegaconf
+
+# ===== Progress & Logging =====
+tqdm>=4.64.0
+colorama>=0.4.6  # Cross-platform colored terminal text
+rich>=13.0.0  # Optional for better console output
+
+# ===== Development & Code Quality =====
+black>=23.0.0  # Code formatter
+isort>=5.12.0  # Import sorter
+flake8>=6.0.0  # Linting
+pytest>=7.0.0  # Testing framework
+
+# ===== Performance Analysis (Optional) =====
+memory-profiler>=0.60.0
+py-spy>=0.3.14
+line-profiler>=4.0.0
+
+# ===== File I/O & Data Formats =====
+h5py>=3.8.0  # HDF5 file format
+jsonlines>=3.1.0  # JSON Lines format
+
+# ===== Jupyter Support (Optional for analysis) =====
+jupyter>=1.0.0
+ipywidgets>=8.0.0
+notebook>=6.5.0
+
+# ===== Additional Utilities =====
+python-dateutil>=2.8.0
+pytz>=2023.3
+requests>=2.28.0
+urllib3>=1.26.0
+
+# ===== Platform Specific (Uncomment if needed) =====
+# Windows specific
+# pywin32>=306; sys_platform == "win32"
+
+# macOS specific  
+# appnope>=0.1.3; sys_platform == "darwin"
+
+# ===== Version Constraints for Stability =====
+# Ensure compatibility between packages
+setuptools>=65.0.0
+wheel>=0.40.0
+pip>=23.0.0
+
+# ===== Optional Advanced Features =====
+# Mixed precision training (usually included with PyTorch)
+# apex  # NVIDIA Apex for advanced mixed precision (if needed)
+
+# Model compilation acceleration
+# torch_tensorrt  # TensorRT integration (if available)
+
+# ===== Notes =====
+# 1. Install PyTorch with CUDA support first:
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# 2. Then install other requirements:
+#    pip install -r requirements.txt
+#
+# 3. For development setup:
+#    pip install -r requirements.txt -e .
+#
+# 4. For minimal installation (production):
+#    pip install torch gymnasium[atari] ale-py opencv-python wandb numpy matplotlib imageio psutil GPUtil PyYAML tqdm
+#
+# 5. Verify installation:
+#    python -c "import torch, gymnasium, ale_py, cv2, wandb; print('All dependencies loaded successfully!')"
