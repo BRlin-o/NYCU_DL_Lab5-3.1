@@ -204,7 +204,9 @@ class PrioritizedReplayBuffer:
         self.beta = beta
         self.n_step = n_step
         self.gamma = gamma
-        self.min_priority = config.get('per.min_priority', 1e-6) if config else 1e-6
+        # self.min_priority = config.get('per.min_priority', 1e-6) if config else 1e-6
+        self.min_priority = 0.000001
+        # print("[DEBUG] min_priority set to:", self.min_priority)
         
         # Multi-step buffer
         self.n_step_buffer = deque(maxlen=n_step)
@@ -294,6 +296,8 @@ class PrioritizedReplayBuffer:
     def update_priorities(self, indices, errors):
         ########## YOUR CODE HERE (for Task 3) ##########
         for idx, error in zip(indices, errors):
+            # print(f"[DEBUG] Updating priority for index {idx} with error {error} ({type(error)})")
+            # print(f"[DEBUG] Current min priority: {self.min_priority} ({type(self.min_priority)})")
             priority = (abs(error) + self.min_priority) ** self.alpha
             self.max_priority = max(self.max_priority, priority)
             self.tree.update(idx, priority)
@@ -330,6 +334,7 @@ class EnhancedDQNAgent:
         if config.get('hardware.compile_model', False):
             print("🚀 Compiling model for faster training...")
             self.q_net = torch.compile(self.q_net, mode="max-autotune")
+            self.target_net = torch.compile(self.target_net, mode="max-autotune")
 
         # Optimizer setup
         self.optimizer = optim.Adam(
@@ -387,7 +392,7 @@ class EnhancedDQNAgent:
         # Setup mixed precision training
         self.use_mixed_precision = config.get('hardware.mixed_precision', False)
         if self.use_mixed_precision:
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler('cuda')
             print("✅ Mixed precision training enabled")
 
         # Setup W&B logging
@@ -417,7 +422,7 @@ class EnhancedDQNAgent:
         state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         with torch.no_grad():
             if self.use_mixed_precision:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     q_values = self.q_net(state_tensor)
             else:
                 q_values = self.q_net(state_tensor)
@@ -472,7 +477,7 @@ class EnhancedDQNAgent:
         ########## YOUR CODE HERE ##########
         # Forward pass
         if self.use_mixed_precision:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 current_q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
                 
                 # Double DQN: Use main network to select actions, target network to evaluate
