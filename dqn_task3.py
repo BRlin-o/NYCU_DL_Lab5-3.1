@@ -148,7 +148,7 @@ class SumTree:
     def __init__(self, capacity):
         self.capacity = capacity
         self.tree = np.zeros(2 * capacity - 1, dtype=np.float32)
-        self.data = np.zeros(capacity, dtype=object)
+        self.data = np.full(capacity, None, dtype=object)
         self.write = 0
         self.n_entries = 0
 
@@ -187,8 +187,13 @@ class SumTree:
         self._propagate(idx, change)
 
     def get(self, s):
+        
         idx = self._retrieve(0, s)
         dataIdx = idx - self.capacity + 1
+        if dataIdx < 0 or dataIdx >= self.capacity:
+            return (idx, 0.0, None)
+        if self.data[dataIdx] is None:
+            return (idx, 0.0, None)
         return (idx, self.tree[idx], self.data[dataIdx])
     
     def __len__(self):
