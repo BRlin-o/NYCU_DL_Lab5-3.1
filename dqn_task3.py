@@ -190,6 +190,9 @@ class SumTree:
         idx = self._retrieve(0, s)
         dataIdx = idx - self.capacity + 1
         return (idx, self.tree[idx], self.data[dataIdx])
+    
+    def __len__(self):
+        return self.n_entries
 
 
 class PrioritizedReplayBuffer:
@@ -204,21 +207,30 @@ class PrioritizedReplayBuffer:
         self.beta = beta
         self.n_step = n_step
         self.gamma = gamma
-        # self.min_priority = config.get('per.min_priority', 1e-6) if config else 1e-6
-        self.min_priority = 0.000001
-        # print("[DEBUG] min_priority set to:", self.min_priority)
+        self.min_priority = config.get('per.min_priority', 0.000001) if config else 0.000001
+        # self.min_priority.astype(np.float32)
         
-        # Multi-step buffer
+        # Multi-step buffer - store transitions as tuples
         self.n_step_buffer = deque(maxlen=n_step)
         
         # Statistics
         self.max_priority = 1.0
+        self.eps = 1e-8  # Small epsilon for numerical stability
         ########## END OF YOUR CODE (for Task 3) ##########
 
     def add(self, transition, error=None):
         ########## YOUR CODE HERE (for Task 3) ##########
+        # Convert Experience to tuple for consistent handling
+        if hasattr(transition, 'state'):
+            # It's an Experience namedtuple
+            transition_tuple = (transition.state, transition.action, transition.reward, 
+                              transition.next_state, transition.done)
+        else:
+            # It's already a tuple
+            transition_tuple = transition
+            
         # Add transition to n-step buffer
-        self.n_step_buffer.append(transition)
+        self.n_step_buffer.append(transition_tuple)
         
         # Only add to main buffer when we have n steps
         if len(self.n_step_buffer) < self.n_step:
@@ -244,51 +256,91 @@ class PrioritizedReplayBuffer:
         """Calculate n-step return"""
         ########## YOUR CODE HERE (for Task 3) ##########
         # Get first transition info
-        state, action = self.n_step_buffer[0][:2]
+        first_transition = self.n_step_buffer[0]
+        state = first_transition[0]
+        action = first_transition[1]
         
         # Calculate n-step reward
         n_step_reward = 0.0
         gamma_power = 1.0
         
-        for i, (_, _, reward, _, done) in enumerate(self.n_step_buffer):
+        # Find actual episode termination point
+        done_flag = False
+        next_state = None
+        
+        for i, transition in enumerate(self.n_step_buffer):
+            _, _, reward, next_state, done = transition
             n_step_reward += gamma_power * reward
             gamma_power *= self.gamma
             
             if done:
                 # Episode terminated before n steps
-                next_state = self.n_step_buffer[i][3]
                 done_flag = True
                 break
-            else:
-                # Full n-step return
-                next_state = self.n_step_buffer[-1][3]
-                done_flag = self.n_step_buffer[-1][4]
+        else:
+            # Full n-step return, episode didn't terminate
+            done_flag = self.n_step_buffer[-1][4]
         
         return Experience(state, action, n_step_reward, next_state, done_flag)
         ########## END OF YOUR CODE (for Task 3) ##########
 
     def sample(self, batch_size):
         ########## YOUR CODE HERE (for Task 3) ##########
+        if len(self.tree) == 0:
+            return [], [], []
+            
         batch = []
         indices = []
-        weights = []
         priorities = []
         
         # Sample from tree
-        segment = self.tree.total() / batch_size
-        
-        for i in range(batch_size):
-            s = random.uniform(segment * i, segment * (i + 1))
-            idx, priority, data = self.tree.get(s)
+        total_priority = self.tree.total()
+        if total_priority <= 0:
+            # Fallback to uniform sampling if no priorities
+            available_indices = list(range(min(len(self.tree), self.tree.capacity)))
+            sampled_indices = np.random.choice(available_indices, 
+                                             size=min(batch_size, len(available_indices)), 
+                                             replace=False)
             
-            batch.append(data)
-            indices.append(idx)
-            priorities.append(priority)
+            for idx in sampled_indices:
+                # Get data directly from tree
+                data = self.tree.data[idx]
+                if data is not None:
+                    batch.append(data)
+                    indices.append(idx)
+                    priorities.append(1.0)
+        else:
+            segment = total_priority / batch_size
+            
+            for i in range(batch_size):
+                s = random.uniform(segment * i, segment * (i + 1))
+                idx, priority, data = self.tree.get(s)
+                
+                # Validate data
+                if data is not None:
+                    batch.append(data)
+                    indices.append(idx)
+                    priorities.append(max(priority, self.min_priority))
         
-        # Calculate importance sampling weights
-        sampling_probabilities = np.array(priorities) / self.tree.total()
-        weights = np.power(self.tree.n_entries * sampling_probabilities, -self.beta)
-        weights /= weights.max()  # Normalize weights
+        if len(batch) == 0:
+            return [], [], []
+        
+        # Calculate importance sampling weights with numerical stability
+        priorities = np.array(priorities)
+        sampling_probabilities = priorities / (total_priority + self.eps)
+        
+        # Avoid division by zero
+        sampling_probabilities = np.maximum(sampling_probabilities, self.eps)
+        
+        # Calculate IS weights
+        weights = np.power(len(self.tree) * sampling_probabilities, -self.beta)
+        
+        # Normalize weights to prevent gradient explosion
+        max_weight = weights.max()
+        if max_weight > 0:
+            weights = weights / max_weight
+        else:
+            weights = np.ones_like(weights)
         
         return batch, indices, weights
         ########## END OF YOUR CODE (for Task 3) ##########
@@ -296,8 +348,6 @@ class PrioritizedReplayBuffer:
     def update_priorities(self, indices, errors):
         ########## YOUR CODE HERE (for Task 3) ##########
         for idx, error in zip(indices, errors):
-            # print(f"[DEBUG] Updating priority for index {idx} with error {error} ({type(error)})")
-            # print(f"[DEBUG] Current min priority: {self.min_priority} ({type(self.min_priority)})")
             priority = (abs(error) + self.min_priority) ** self.alpha
             self.max_priority = max(self.max_priority, priority)
             self.tree.update(idx, priority)
@@ -358,19 +408,29 @@ class EnhancedDQNAgent:
 
         # PER setup
         buffer_size = config.get('per.buffer_size', 400000)
-        per_alpha = config.get('per.alpha', 0.6)
-        per_beta_start = config.get('per.beta_start', 0.4)
-        self.per_beta_final = config.get('per.beta_final', 1.0)
-        self.per_beta_steps = config.get('per.beta_steps', 1000000)
+        per_enabled = config.get('per.enabled', True)
         
-        self.memory = PrioritizedReplayBuffer(
-            capacity=buffer_size,
-            alpha=per_alpha,
-            beta=per_beta_start,
-            n_step=self.n_step,
-            gamma=self.gamma,
-            config=config
-        )
+        if per_enabled:
+            per_alpha = config.get('per.alpha', 0.6)
+            per_beta_start = config.get('per.beta_start', 0.4)
+            self.per_beta_final = config.get('per.beta_final', 1.0)
+            self.per_beta_steps = config.get('per.beta_steps', 1000000)
+            
+            self.memory = PrioritizedReplayBuffer(
+                capacity=buffer_size,
+                alpha=per_alpha,
+                beta=per_beta_start,
+                n_step=self.n_step,
+                gamma=self.gamma,
+                config=config
+            )
+            self.use_per = True
+            print("✅ Using Prioritized Experience Replay")
+        else:
+            # Fallback to uniform replay buffer
+            self.memory = deque(maxlen=buffer_size)
+            self.use_per = False
+            print("⚠️ Using uniform replay buffer (PER disabled)")
 
         # Training state
         self.env_count = 0
@@ -380,8 +440,8 @@ class EnhancedDQNAgent:
         self.recent_scores = deque(maxlen=100)
         
         # Training parameters
-        self.max_episode_steps = config.get('environment.max_episode_steps', 108000)
-        self.replay_start_size = config.get('per.buffer_size', 400000) // 8  # Start training when 1/8 full
+        self.max_episode_steps = config.get('environment.max_episode_steps', 108000) 
+        self.replay_start_size = max(buffer_size // 8, 10000)  # Start training when 1/8 full, min 10k
         self.target_update_frequency = config.get('training.target_update_freq', 8000)
         self.train_per_step = config.get('training.train_frequency', 4)
         
@@ -438,8 +498,8 @@ class EnhancedDQNAgent:
             decay_rate = (self.epsilon - self.epsilon_final) / self.epsilon_decay_steps
             self.epsilon = max(self.epsilon_final, self.epsilon - decay_rate)
         
-        # Update PER beta
-        if self.env_count < self.per_beta_steps:
+        # Update PER beta (only if using PER)
+        if self.use_per and self.env_count < self.per_beta_steps:
             beta_progress = self.env_count / self.per_beta_steps
             current_beta = self.config.get('per.beta_start', 0.4) + \
                          beta_progress * (self.per_beta_final - self.config.get('per.beta_start', 0.4))
@@ -448,10 +508,22 @@ class EnhancedDQNAgent:
         self.train_count += 1
 
         ########## YOUR CODE HERE ##########
-        # Sample batch from PER
-        experiences, indices, weights = self.memory.sample(self.batch_size)
+        if self.use_per:
+            # Sample batch from PER
+            experiences, indices, weights = self.memory.sample(self.batch_size)
+            
+            if len(experiences) == 0:
+                return None
+            
+            # Convert weights to tensor
+            weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+        else:
+            # Uniform sampling from deque
+            experiences = random.sample(self.memory, self.batch_size)
+            indices = None
+            weights = torch.ones(self.batch_size).to(self.device)  # Uniform weights
         
-        # Unpack experiences
+        # Unpack experiences - handle both Experience namedtuples and tuples
         states = []
         actions = []
         rewards = []
@@ -459,11 +531,20 @@ class EnhancedDQNAgent:
         dones = []
         
         for exp in experiences:
-            states.append(exp.state)
-            actions.append(exp.action)
-            rewards.append(exp.reward)
-            next_states.append(exp.next_state)
-            dones.append(exp.done)
+            if hasattr(exp, 'state'):
+                # It's an Experience namedtuple
+                states.append(exp.state)
+                actions.append(exp.action)
+                rewards.append(exp.reward)
+                next_states.append(exp.next_state)
+                dones.append(exp.done)
+            else:
+                # It's a tuple
+                states.append(exp[0])
+                actions.append(exp[1])
+                rewards.append(exp[2])
+                next_states.append(exp[3])
+                dones.append(exp[4])
         ########## END OF YOUR CODE ##########
 
         # Convert to tensors
@@ -472,7 +553,6 @@ class EnhancedDQNAgent:
         actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
-        weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
 
         ########## YOUR CODE HERE ##########
         # Forward pass
@@ -520,9 +600,10 @@ class EnhancedDQNAgent:
             torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), self.gradient_clip)
             self.optimizer.step()
 
-        # Update priorities in PER
-        td_errors_np = td_errors.detach().cpu().numpy()
-        self.memory.update_priorities(indices, td_errors_np)
+        # Update priorities in PER (only if using PER)
+        if self.use_per and indices is not None:
+            td_errors_np = td_errors.detach().cpu().numpy()
+            self.memory.update_priorities(indices, td_errors_np)
         ########## END OF YOUR CODE ##########
 
         # Update target network
@@ -568,7 +649,7 @@ class EnhancedDQNAgent:
             'step': step,
             'episode': self.episode_count,
             'exploration/epsilon': self.epsilon,
-            'algorithm/per_beta': self.memory.beta,
+            'algorithm/per_beta': self.memory.beta if self.use_per else 0,
             'system/replay_buffer_size': len(self.memory),
         }
         
@@ -682,9 +763,14 @@ class EnhancedDQNAgent:
                 
                 next_state = self.preprocessor.step(next_obs)
                 
-                # Store experience in PER buffer
-                experience = Experience(state, action, reward, next_state, done)
-                self.memory.add(experience)
+                # Store experience in buffer
+                experience = (state, action, reward, next_state, done)
+                
+                if self.use_per:
+                    self.memory.add(experience)
+                else:
+                    # Simple deque append for uniform sampling
+                    self.memory.append(experience)
 
                 # Training step
                 if self.env_count % self.train_per_step == 0:
