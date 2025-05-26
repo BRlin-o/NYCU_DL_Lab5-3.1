@@ -434,7 +434,7 @@ class EnhancedDQNAgent:
             self.q_net.parameters(), 
             lr=float(config.get('training.lr', 2.5e-4)),
             eps=float(config.get('training.optimizer.eps', 1.5e-4)),
-            weight_decay=config.get('training.optimizer.weight_decay', 0)
+            weight_decay=float(config.get('training.optimizer.weight_decay', 0))
         )
 
         # Training parameters
