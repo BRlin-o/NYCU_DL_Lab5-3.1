@@ -18,7 +18,7 @@ import traceback
 # Add src to path
 sys.path.append('src')
 
-from dqn_task3 import EnhancedDQNAgent
+from dqn_task3_1 import EnhancedDQNAgent
 from src.config import Config, load_config_from_args
 
 def setup_environment():
@@ -200,8 +200,8 @@ def main():
         
         # Confirm before starting
         if not config.get('debug', False) and not resumed:
-            response = input("🚀 Ready to start training? [y/N]: ")
-            if response.lower() not in ['y', 'yes']:
+            response = input("🚀 Ready to start training? [Y/n]: ")
+            if response.lower() in ['n', 'no']:
                 print("❌ Training cancelled.")
                 return
         

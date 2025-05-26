@@ -10,8 +10,9 @@ experiment:
 training:
   batch_size: 128          # 利用24G VRAM
   lr: 5e-4                 # 更高學習率
-  train_frequency: 2       # 更頻繁訓練
-  gradient_clipping: 5.0   # 更嚴格梯度裁剪
+  train_frequency: 1       # 更頻繁訓練
+  gradient_clipping: 10.0   # 更嚴格梯度裁剪
+  target_update_freq: 2000  # 目標網路更新頻率
   
   # 更激進的優化器設定
   optimizer:
@@ -22,7 +23,7 @@ training:
 exploration:
   epsilon_start: 1.0
   epsilon_final: 0.05      # 稍高的最終探索率
-  epsilon_decay_steps: 200000  # 更快衰減
+  epsilon_decay_steps: 50000  # 更快衰減
 
 # PER優化設定
 per:
@@ -30,22 +31,18 @@ per:
   beta_start: 0.5          # 更高起始β
   beta_final: 1.0
   beta_steps: 800000
-  buffer_size: 300000      # 較小buffer，更快採樣
-
-# 更頻繁的目標網路更新
-training:
-  target_update_freq: 6000
+  buffer_size: 100000      # 較小buffer，更快採樣
 
 # 更頻繁的評估
 evaluation:
-  eval_frequency: 15000    # 更頻繁評估
-  eval_episodes: 25        # 更多評估episode
+  eval_frequency: 20000    # 更頻繁評估
+  eval_episodes: 20        # 更多評估episode
   save_videos: true
 
 # 更頻繁的記錄
 logging:
-  log_frequency: 500
-  checkpoint_frequency: 5000
+  log_frequency: 1000
+  checkpoint_frequency: 10000
 
 # 硬體優化
 hardware:
@@ -58,4 +55,4 @@ hardware:
 early_stopping:
   enabled: true
   target_score: 19.0
-  patience_episodes: 50    # 更少耐心，快速停止
+  patience_episodes: 64    # 更少耐心，快速停止
