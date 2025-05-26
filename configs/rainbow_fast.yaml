@@ -27,8 +27,8 @@ exploration:
 
 # PER優化設定
 per:
-  alpha: 0.7               # 更強的優先級
-  beta_start: 0.5          # 更高起始β
+  alpha: 0.6               # 更強的優先級
+  beta_start: 0.4          # 更高起始β
   beta_final: 1.0
   beta_steps: 800000
   buffer_size: 100000      # 較小buffer，更快採樣
