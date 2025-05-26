@@ -259,14 +259,14 @@ class PrioritizedReplayBuffer:
         self.beta = beta
         self.n_step = n_step
         self.gamma = gamma
-        self.min_priority = config.get('per.min_priority', 0.000001) if config else 0.000001
+        self.min_priority = float(config.get('per.min_priority', 1e-6) if config else 1e-6)
         
         # Multi-step buffer - store transitions as tuples
         self.n_step_buffer = deque(maxlen=n_step)
         
         # Statistics
         self.max_priority = 1.0
-        self.eps = 1e-8  # Small epsilon for numerical stability
+        self.eps = float(1e-8)  # Small epsilon for numerical stability
         ########## END OF YOUR CODE (for Task 3) ##########
 
     def add(self, transition, error=None):
@@ -432,8 +432,8 @@ class EnhancedDQNAgent:
         # Optimizer setup
         self.optimizer = optim.Adam(
             self.q_net.parameters(), 
-            lr=config.get('training.lr', 2.5e-4),
-            eps=config.get('training.optimizer.eps', 1.5e-4),
+            lr=float(config.get('training.lr', 2.5e-4)),
+            eps=float(config.get('training.optimizer.eps', 1.5e-4)),
             weight_decay=config.get('training.optimizer.weight_decay', 0)
         )
 
