@@ -1,0 +1,54 @@
+# Stable training configuration for RTX4080
+_base_: "base.yaml"
+
+experiment:
+  name: "rainbow_stable_training"
+  description: "Stable training configuration for rtx3090, conservative parameters"
+  tags: ["task3", "rainbow", "fast", "rtx3090"]
+
+# Conservative training parameters for stability
+training:
+  batch_size: 128           # 適合12G VRAM
+  lr: 2.5e-4               # 保守學習率
+  train_frequency: 1       # 標準訓練頻率
+  gradient_clipping: 10.0  # 標準梯度裁剪
+  target_update_freq: 2000  # 目標網路更新頻率
+  total_steps: 1100000     # 總訓練步數(30W測試用)
+
+# 標準探索衰減
+exploration:
+  epsilon_start: 1.0
+  epsilon_final: 0.05
+  epsilon_decay_steps: 50000  # 更慢衰減，更穩定
+
+# 標準PER設定
+per:
+  alpha: 0.6
+  beta_start: 0.4
+  beta_final: 1.0
+  beta_steps: 1000000
+  buffer_size: 100000      # 適中的buffer大小
+
+# 標準評估頻率
+evaluation:
+  eval_frequency: 20000
+  eval_episodes: 20
+  save_videos: true
+
+# 標準記錄頻率
+logging:
+  log_frequency: 1000
+  checkpoint_frequency: 10000
+
+# RTX4080硬體優化
+hardware:
+  device: "cuda:0"         # RTX4080 (假設為第二張卡)
+  mixed_precision: true    # 啟用混合精度
+  compile_model: false     # 保守選項
+  num_workers: 6
+
+# 標準早停設定
+early_stopping:
+  enabled: true
+  target_score: 19.0
+  patience_episodes: 100
