@@ -107,8 +107,6 @@ class DQN(nn.Module):
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0), # (9-3)/1+1 = 7
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),  # 額外層
-            nn.ReLU()
         )
         
         # Calculate the size of flattened features
@@ -120,14 +118,14 @@ class DQN(nn.Module):
             # Dueling DQN architecture
             # Value stream
             self.value_stream = nn.Sequential(
-                nn.Linear(self.feature_size, self.hidden_dim),
+                NoisyLinear(self.feature_size, self.hidden_dim),
                 nn.ReLU(),
                 NoisyLinear(self.hidden_dim, 1)
             )
             
             # Advantage stream  
             self.advantage_stream = nn.Sequential(
-                nn.Linear(self.feature_size, self.hidden_dim),
+                NoisyLinear(self.feature_size, self.hidden_dim),
                 nn.ReLU(),
                 NoisyLinear(self.hidden_dim, num_actions)
             )
@@ -544,6 +542,9 @@ class EnhancedDQNAgent:
         if len(self.memory) < self.replay_start_size:
             return None
         
+        self.q_net.reset_noise()
+        self.target_net.reset_noise()
+        
         # Update exploration
         if self.epsilon > self.epsilon_final:
             decay_rate = (self.epsilon - self.epsilon_final) / self.epsilon_decay_steps
@@ -599,11 +600,11 @@ class EnhancedDQNAgent:
         ########## END OF YOUR CODE ##########
 
         # Convert to tensors
-        states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device)
-        next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device)
-        actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
+        states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device, non_blocking=True)
+        next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device, non_blocking=True)
+        actions = torch.tensor(actions, dtype=torch.int64).to(self.device, non_blocking=True)
+        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device, non_blocking=True)
+        dones = torch.tensor(dones, dtype=torch.float32).to(self.device, non_blocking=True)
 
         ########## YOUR CODE HERE ##########
         # Forward pass
@@ -670,9 +671,6 @@ class EnhancedDQNAgent:
         # Update target network
         if self.train_count % self.target_update_frequency == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
-
-        ## TODO: 看要不要加上
-        # self.q_net.reset_noise()
 
         # Return training metrics
         return {
@@ -815,6 +813,8 @@ class EnhancedDQNAgent:
         target_score = self.config.get('early_stopping.target_score', 19.0)
         
         start_time = time.time()
+
+        last_time = start_time
         
         while self.env_count < total_steps:
             # Start episode
@@ -859,12 +859,16 @@ class EnhancedDQNAgent:
                 if self.env_count % self.config.get('logging.log_frequency', 1000) == 0:
                     elapsed_time = time.time() - start_time
                     fps = self.env_count / elapsed_time
+                    runtime = time.time() - last_time
+                    
                     print(f"[Step {self.env_count:>7}] Ep: {self.episode_count:>4} | "
                           f"Reward: {episode_reward:>6.1f} | Eps: {self.epsilon:.4f} | "
-                          f"FPS: {fps:.1f} | Buffer: {len(self.memory):>6}")
+                          f"FPS: {fps:.1f} | Buffer: {len(self.memory):>6} | Runtime: {runtime:.2f}s")
                     
                     if training_metrics:
                         self._log_metrics(self.env_count, episode_reward, training_metrics=training_metrics, fps=fps)
+
+                    last_time = time.time()
 
                 # Evaluation
                 if self.env_count % self.eval_frequency == 0:
