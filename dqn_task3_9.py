@@ -381,13 +381,13 @@ class EnhancedDQNAgent:
         # Environment setup
         env_name = config.get('environment.name', 'ALE/Pong-v5')
         self.num_envs = config.get('experiment.num_envs', 1)
-        # self.env = gym.make(env_name, render_mode="rgb_array")
-        self.env = gym.vector.SyncVectorEnv(
-            [make_env(env_name, self.seed + i, i, config.get('capture_video', False), self.exp_name) for i in range(self.num_envs)]
-        )
+        self.env = gym.make(env_name, render_mode="rgb_array")
+        self.num_actions = self.env.action_space.n
+        # self.env = gym.vector.SyncVectorEnv(
+        #     [make_env(env_name, self.seed + i, i, config.get('capture_video', False), self.exp_name) for i in range(self.num_envs)]
+        # )        
+        # self.num_actions = self.env.single_action_space.n
         self.test_env = gym.make(env_name, render_mode="rgb_array")
-        # self.num_actions = self.env.action_space.n
-        self.num_actions = self.env.single_action_space.n
         self.preprocessor = AtariPreprocessor(config.get('environment.frame_stack', 4))
 
         # C51
@@ -427,7 +427,8 @@ class EnhancedDQNAgent:
         self.per_replay_eps = config.get('per.eps', 1e-6)
         self.memory = PrioritizedReplayBuffer(
             capacity=self.buffer_size,
-            obs_shape=self.env.single_observation_space.shape,
+            # obs_shape=self.env.single_observation_space.shape,
+            obs_shape=(4, 84, 84),  # Atari preprocessed shape
             device=self.device,
             alpha=self.per_replay_alpha,
             beta=self.per_replay_beta,
