@@ -8,7 +8,7 @@ experiment:
   name: "Rainbow"
   description: "Stable training configuration for rtx3090, conservative parameters"
   tags: ["task3", "rainbow", "fast", "rtx3090", "v10"]
-  num_envs: 2
+  num_envs: 4
   capture_videos: false
   seed: 42  # 固定隨機種子以確保可重現性
 

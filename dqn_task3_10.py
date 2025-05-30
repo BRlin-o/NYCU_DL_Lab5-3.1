@@ -398,7 +398,7 @@ class EnhancedDQNAgent:
         self.num_envs = config.get('experiment.num_envs', 1)
         # self.env = gym.make(env_name, render_mode="rgb_array")
         # self.num_actions = self.env.action_space.n
-        self.envs = gym.vector.SyncVectorEnv(
+        self.envs = gym.vector.AsyncVectorEnv(
             [make_env(env_name, self.seed + i, i, config.get('capture_video', False), self.exp_name) for i in range(self.num_envs)]
         )        
         self.num_actions = self.envs.single_action_space.n
@@ -807,24 +807,6 @@ class EnhancedDQNAgent:
             ## terminations: [False False]
             ## truncations: [False False]
 
-            # # 替代的episode結束檢測
-            # for i in range(self.num_envs):
-            #     if terminations[i] or truncations[i]:
-            #         print(f"🎯 Environment {i} episode ended at step {self.env_count}")
-            #         print(f"Termination: {terminations[i]}, Truncation: {truncations[i]}")
-
-            # if "final_info" in infos:
-            #     for info in infos["final_info"]:
-            #         if info and "episode" in info:
-            #             episode_reward = info["episode"]["r"]
-            #             self.episode_count += 1
-            #             self.recent_scores.append(episode_reward)
-
-            #             print(f"[DEBUG] Episode finished: {self.episode_count} | "
-            #                   f"Reward: {episode_reward:.2f} | "
-            #                   f"Recent Avg: {np.mean(self.recent_scores):.2f} | "
-            #                   f"Best Score: {self.best_score:.2f}")
-
             # 💰 累積每個環境的獎勵
             episode_rewards += rewards
 
@@ -845,14 +827,22 @@ class EnhancedDQNAgent:
             # 🔄 處理 truncated episodes 的最終觀察
             real_next_obs = next_obs.copy()
             # 檢查infos中是否有final_observation
-            if "final_observation" in infos:
-                for idx, trunc in enumerate(truncations):
-                    if trunc:
-                        real_next_obs[idx] = infos["final_observation"][idx]
-            else:
-                # 如果沒有final_observation，檢查其他可能的keys
-                # print("Warning: 'final_observation' not found in infos. Available keys:", list(infos.keys()))
-                pass
+            # if "final_observation" in infos:
+            #     for idx, trunc in enumerate(truncations):
+            #         if trunc:
+            #             real_next_obs[idx] = infos["final_observation"][idx]
+            # else:
+            #     # 如果沒有final_observation，檢查其他可能的keys
+            #     # print("Warning: 'final_observation' not found in infos. Available keys:", list(infos.keys()))
+            #     pass
+            # 只有當某個 env 真正終止/截斷時才去找 final_observation
+            done_mask = terminations | truncations
+            if np.any(done_mask):
+                # Gymnasium: "final_observation"
+                # Stable-Baselines3 VecEnv: "terminal_observation"
+                key = "final_observation"
+                if key in infos:
+                    real_next_obs[done_mask] = infos[key][done_mask]
 
             # Store experiences in replay buffer
             for i in range(self.num_envs):
