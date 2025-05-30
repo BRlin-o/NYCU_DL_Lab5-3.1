@@ -1,0 +1,52 @@
+# Stable training configuration for RTX4080
+_base_: "base.yaml"
+
+environment:
+  name: "ALE/Pong-v5"
+
+experiment:
+  name: "Rainbow"
+  description: "Stable training configuration for rtx3090, conservative parameters"
+  tags: ["task3", "rainbow", "fast", "rtx3090", "v10"]
+  num_envs: 2
+  capture_videos: false
+  seed: 42  # 固定隨機種子以確保可重現性
+
+# Conservative training parameters for stability
+training:
+  batch_size: 128           # 適合12G VRAM
+  lr: 4.5e-4               # 保守學習率
+  train_frequency: 1       # 標準訓練頻率
+  target_update_freq: 4000  # 目標網路更新頻率
+  total_steps: 1100000     # 總訓練步數(30W測試用)
+  learning_starts: 40000  # 開始訓練前的步數
+
+# 標準PER設定
+per: ## prioritized replay alpha
+  alpha: 0.5
+  beta: 0.4
+  buffer_size: 1000000      # 適中的buffer大小
+
+# 標準評估頻率
+evaluation:
+  eval_frequency: 20000
+  eval_episodes: 10
+  save_videos: true
+
+# 標準記錄頻率
+logging:
+  log_frequency: 5000
+  checkpoint_frequency: 40000
+
+# RTX4080硬體優化
+hardware:
+  device: "cuda:0"         # RTX4080 (假設為第二張卡)
+  mixed_precision: false    # 啟用混合精度
+  compile_model: false     # 保守選項
+  num_workers: 6
+
+# 標準早停設定
+early_stopping:
+  enabled: true
+  target_score: 19.0
+  patience_episodes: 100
