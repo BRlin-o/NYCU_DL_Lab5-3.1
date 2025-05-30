@@ -24,7 +24,7 @@ import seaborn as sns
 # Add src to path
 sys.path.append('src')
 
-from dqn_task3 import DQN, AtariPreprocessor
+from dqn_task3_9 import DQN, AtariPreprocessor
 from src.config import Config
 from src.utils import create_evaluation_video, get_system_info
 
@@ -48,6 +48,9 @@ class ModelEvaluator:
         self.env = gym.make("ALE/Pong-v5", render_mode="rgb_array")
         self.preprocessor = AtariPreprocessor()
         
+        # Load model parameters from checkpoint first
+        self._load_checkpoint_info()
+        
         # Load model
         self.model = self._load_model()
         
@@ -55,6 +58,8 @@ class ModelEvaluator:
         print(f"   Model: {os.path.basename(model_path)}")
         print(f"   Device: {self.device}")
         print(f"   Environment: Pong-v5")
+        print(f"   Model type: Distributional DQN (C51)")
+        print(f"   Atoms: {self.n_atoms}, V-range: [{self.v_min}, {self.v_max}]")
     
     def _create_default_config(self):
         """Create default config for evaluation"""
@@ -64,35 +69,66 @@ class ModelEvaluator:
                     'model.dueling': True,
                     'model.hidden_dim': 512,
                     'model.input_channels': 4,
+                    'model.n_atoms': 51,
+                    'model.v_min': -10.0,
+                    'model.v_max': 10.0,
                     'exploration.epsilon_eval': 0.001,
                 }
                 return defaults.get(key, default)
         
         return DefaultConfig()
     
+    def _load_checkpoint_info(self):
+        """Load checkpoint to extract model parameters"""
+        print(f"📂 Loading checkpoint info: {self.model_path}")
+        checkpoint = torch.load(self.model_path, map_location='cpu', weights_only=False)
+        
+        # Extract distributional DQN parameters from checkpoint
+        if 'n_atoms' in checkpoint:
+            self.n_atoms = checkpoint['n_atoms']
+            self.v_min = checkpoint['v_min']
+            self.v_max = checkpoint['v_max']
+            print(f"   📋 Found C51 parameters in checkpoint")
+        else:
+            # Use config or defaults
+            self.n_atoms = self.config.get('model.n_atoms', 51)
+            self.v_min = self.config.get('model.v_min', -10.0)
+            self.v_max = self.config.get('model.v_max', 10.0)
+            print(f"   📋 Using default C51 parameters")
+        
+        # Print checkpoint info
+        if 'step' in checkpoint:
+            print(f"   Step: {checkpoint.get('step', 'N/A')}")
+        if 'episode' in checkpoint:
+            print(f"   Episode: {checkpoint.get('episode', 'N/A')}")
+        if 'best_score' in checkpoint:
+            print(f"   Best Score: {checkpoint.get('best_score', 'N/A')}")
+        if 'timestamp' in checkpoint:
+            print(f"   Saved: {checkpoint['timestamp']}")
+    
     def _load_model(self) -> torch.nn.Module:
-        """Load model from checkpoint"""
-        # Create model
-        model = DQN(self.env.action_space.n, self.config).to(self.device)
+        """Load model from checkpoint with correct parameters"""
+        # Create model with extracted parameters
+        model = DQN(
+            num_actions=self.env.action_space.n,
+            n_atoms=self.n_atoms,
+            v_min=self.v_min,
+            v_max=self.v_max,
+            hidden_dim=self.config.get('model.hidden_dim', 512)
+        ).to(self.device)
         
         # Load checkpoint
-        print(f"📂 Loading checkpoint: {self.model_path}")
-        checkpoint = torch.load(self.model_path, map_location=self.device)
+        print(f"🔄 Loading model state...")
+        checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=False)
         
         if 'model_state_dict' in checkpoint:
             model.load_state_dict(checkpoint['model_state_dict'])
-            
-            # Print checkpoint info
-            print(f"   Step: {checkpoint.get('step', 'N/A')}")
-            print(f"   Episode: {checkpoint.get('episode', 'N/A')}")
-            print(f"   Best Score: {checkpoint.get('best_score', 'N/A')}")
-            if 'timestamp' in checkpoint:
-                print(f"   Saved: {checkpoint['timestamp']}")
         else:
-            # Direct state dict
+            # Direct state dict (fallback for older checkpoints)
             model.load_state_dict(checkpoint)
         
         model.eval()
+        print(f"✅ Model loaded successfully")
         return model
     
     def evaluate_single_episode(self, render_frames: bool = False, max_steps: int = 108000) -> Tuple[float, List, Dict]:
@@ -108,6 +144,7 @@ class ModelEvaluator:
             'actions': [],
             'rewards': [],
             'q_values': [],
+            'q_distributions': [],  # For distributional analysis
         }
         
         epsilon = self.config.get('exploration.epsilon_eval', 0.001)
@@ -122,12 +159,20 @@ class ModelEvaluator:
             if np.random.random() < epsilon:
                 action = np.random.randint(0, self.env.action_space.n)
                 q_values = None
+                q_dist = None
             else:
                 state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
                 with torch.no_grad():
-                    q_values = self.model(state_tensor)
+                    # Get distribution from model
+                    q_dist_raw = self.model(state_tensor)  # [1, num_actions, n_atoms]
+                    
+                    # Convert to Q-values by taking expectation
+                    q_values = torch.sum(q_dist_raw * self.model.support, dim=2)  # [1, num_actions]
                     action = q_values.argmax().item()
+                    
+                    # Store for analysis
                     q_values = q_values.cpu().numpy().flatten()
+                    q_dist = q_dist_raw.cpu().numpy()
             
             # Step environment
             next_obs, reward, terminated, truncated, _ = self.env.step(action)
@@ -141,6 +186,8 @@ class ModelEvaluator:
             episode_stats['rewards'].append(reward)
             if q_values is not None:
                 episode_stats['q_values'].append(q_values.copy())
+            if q_dist is not None:
+                episode_stats['q_distributions'].append(q_dist.copy())
         
         return total_reward, frames, episode_stats
     
@@ -185,17 +232,26 @@ class ModelEvaluator:
             'positive_rate': float(np.sum(scores > 0) / len(scores)),
             'evaluation_date': datetime.now().isoformat(),
             'model_path': self.model_path,
+            'model_type': 'Rainbow',
+            'model_params': {
+                'n_atoms': self.n_atoms,
+                'v_min': self.v_min,
+                'v_max': self.v_max,
+            }
         }
         
         # Analyze episode statistics
         if all_episode_stats:
             all_actions = []
             all_q_values = []
+            all_q_distributions = []
             
             for stats in all_episode_stats:
                 all_actions.extend(stats['actions'])
                 if stats['q_values']:
                     all_q_values.extend(stats['q_values'])
+                if stats['q_distributions']:
+                    all_q_distributions.extend(stats['q_distributions'])
             
             if all_actions:
                 action_counts = np.bincount(all_actions, minlength=self.env.action_space.n)
@@ -211,6 +267,17 @@ class ModelEvaluator:
                     'std': float(np.std(all_q_values)),
                     'min': float(np.min(all_q_values)),
                     'max': float(np.max(all_q_values)),
+                }
+            
+            # Distributional analysis
+            if all_q_distributions:
+                all_q_distributions = np.array(all_q_distributions)
+                results['distributional_stats'] = {
+                    'mean_distribution_entropy': float(np.mean([
+                        -np.sum(dist * np.log(dist + 1e-8)) 
+                        for dist in all_q_distributions.reshape(-1, self.n_atoms)
+                    ])),
+                    'distribution_shape': all_q_distributions.shape,
                 }
         
         return results, video_frames
@@ -236,7 +303,7 @@ class ModelEvaluator:
         """Create evaluation visualization plots"""
         plt.style.use('seaborn-v0_8')
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle(f'Model Evaluation Report\nMean Score: {results["mean_score"]:.2f} ± {results["std_score"]:.2f}', fontsize=16)
+        fig.suptitle(f'Distributional DQN Evaluation Report\nMean Score: {results["mean_score"]:.2f} ± {results["std_score"]:.2f}', fontsize=16)
         
         # Score distribution
         axes[0, 0].hist(results['scores'], bins=20, alpha=0.7, edgecolor='black')
@@ -278,8 +345,9 @@ class ModelEvaluator:
         # Summary statistics
         axes[1, 1].axis('off')
         stats_text = f"""
-Model Performance Summary:
+Distributional DQN Performance Summary:
 
+Model Type: {results.get('model_type', 'Unknown')}
 Episodes Evaluated: {results['num_episodes']}
 Mean Score: {results['mean_score']:.2f} ± {results['std_score']:.2f}
 Median Score: {results['median_score']:.2f}
@@ -291,6 +359,10 @@ Positive Rate (>0): {results['positive_rate']*100:.1f}%
 
 Task Assessment:
 Target Score (19): {'✅ ACHIEVED' if results['mean_score'] >= 19 else '❌ NOT REACHED'}
+
+Model Parameters:
+Atoms: {results.get('model_params', {}).get('n_atoms', 'N/A')}
+V-range: [{results.get('model_params', {}).get('v_min', 'N/A')}, {results.get('model_params', {}).get('v_max', 'N/A')}]
 """
         
         if 'q_value_stats' in results:
@@ -302,8 +374,15 @@ Std: {q_stats['std']:.3f}
 Range: [{q_stats['min']:.3f}, {q_stats['max']:.3f}]
 """
         
+        if 'distributional_stats' in results:
+            dist_stats = results['distributional_stats']
+            stats_text += f"""
+Distributional Stats:
+Avg Entropy: {dist_stats['mean_distribution_entropy']:.3f}
+"""
+        
         axes[1, 1].text(0.05, 0.95, stats_text, transform=axes[1, 1].transAxes, 
-                       fontsize=11, verticalalignment='top', fontfamily='monospace',
+                       fontsize=10, verticalalignment='top', fontfamily='monospace',
                        bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
         
         plt.tight_layout()
@@ -316,12 +395,22 @@ Range: [{q_stats['min']:.3f}, {q_stats['max']:.3f}]
         
         with open(summary_path, 'w') as f:
             f.write("="*80 + "\n")
-            f.write("ENHANCED DQN MODEL EVALUATION REPORT - TASK 3\n")
+            f.write("DISTRIBUTIONAL DQN MODEL EVALUATION REPORT - TASK 3\n")
             f.write("="*80 + "\n\n")
             
             f.write(f"Model Path: {results['model_path']}\n")
+            f.write(f"Model Type: {results.get('model_type', 'Unknown')}\n")
             f.write(f"Evaluation Date: {results['evaluation_date']}\n")
             f.write(f"Episodes Evaluated: {results['num_episodes']}\n\n")
+            
+            # Model parameters
+            if 'model_params' in results:
+                f.write("MODEL PARAMETERS:\n")
+                f.write("-" * 40 + "\n")
+                params = results['model_params']
+                f.write(f"Atoms (n_atoms):     {params.get('n_atoms', 'N/A'):>8}\n")
+                f.write(f"V-min:               {params.get('v_min', 'N/A'):>8}\n")
+                f.write(f"V-max:               {params.get('v_max', 'N/A'):>8}\n\n")
             
             f.write("PERFORMANCE METRICS:\n")
             f.write("-" * 40 + "\n")
@@ -368,6 +457,12 @@ Range: [{q_stats['min']:.3f}, {q_stats['max']:.3f}]
                 f.write(f"Mean Q-Value:        {q_stats['mean']:>8.3f}\n")
                 f.write(f"Q-Value Std:         {q_stats['std']:>8.3f}\n")
                 f.write(f"Q-Value Range:       [{q_stats['min']:.3f}, {q_stats['max']:.3f}]\n")
+            
+            if 'distributional_stats' in results:
+                f.write(f"\nDISTRIBUTIONAL ANALYSIS:\n")
+                f.write("-" * 40 + "\n")
+                dist_stats = results['distributional_stats']
+                f.write(f"Avg Distribution Entropy: {dist_stats['mean_distribution_entropy']:>8.3f}\n")
 
 def evaluate_all_checkpoints(exp_dir: str, episodes_per_checkpoint: int = 10) -> Dict[str, Dict]:
     """Evaluate all checkpoints in an experiment directory"""
@@ -407,12 +502,14 @@ def evaluate_all_checkpoints(exp_dir: str, episodes_per_checkpoint: int = 10) ->
             
         except Exception as e:
             print(f"   ❌ Evaluation failed: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     return results
 
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate Enhanced DQN models for Task 3')
+    parser = argparse.ArgumentParser(description='Evaluate Distributional DQN models for Task 3')
     parser.add_argument('--model', type=str, help='Path to model checkpoint (.pt file)')
     parser.add_argument('--experiment', type=str, help='Path to experiment directory')
     parser.add_argument('--all-checkpoints', action='store_true', help='Evaluate all checkpoints in experiment')
@@ -478,7 +575,7 @@ def main():
                 print(f"❌ Model file not found: {model_path}")
                 return
             
-            print(f"🎯 Evaluating model: {os.path.basename(model_path)}")
+            print(f"🎯 Evaluating Distributional DQN model: {os.path.basename(model_path)}")
             
             # Create evaluator and run evaluation
             evaluator = ModelEvaluator(model_path, config_path, args.device)
@@ -493,16 +590,20 @@ def main():
             if args.save_videos and video_frames:
                 video_path = os.path.join(output_dir, 'evaluation_video.mp4')
                 print(f"🎬 Saving evaluation video...")
-                import imageio
-                with imageio.get_writer(video_path, fps=30) as writer:
-                    for frame in video_frames:
-                        writer.append_data(frame)
-                print(f"✅ Video saved: {video_path}")
+                try:
+                    import imageio
+                    with imageio.get_writer(video_path, fps=30) as writer:
+                        for frame in video_frames:
+                            writer.append_data(frame)
+                    print(f"✅ Video saved: {video_path}")
+                except ImportError:
+                    print("⚠️ imageio not available, skipping video save")
             
             # Print summary
             print("\n" + "="*60)
             print("EVALUATION SUMMARY")
             print("="*60)
+            print(f"Model Type:      {results.get('model_type', 'Unknown')}")
             print(f"Episodes:        {results['num_episodes']}")
             print(f"Mean Score:      {results['mean_score']:.2f} ± {results['std_score']:.2f}")
             print(f"Success Rate:    {results['success_rate']*100:.1f}% (≥19 score)")
