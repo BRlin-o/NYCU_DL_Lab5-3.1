@@ -21,15 +21,18 @@ import time
 from typing import Tuple, List, Optional, Dict, Any
 import json
 from datetime import datetime
-
+from stable_baselines3.common.atari_wrappers import (
+    ClipRewardEnv,
+    EpisodicLifeEnv,
+    FireResetEnv,
+    MaxAndSkipEnv,
+    NoopResetEnv,
+)
 
 # 導入我們的配置系統
 from src.config import Config, load_config_from_args
 
 gym.register_envs(ale_py)
-
-# 經驗元組定義
-Experience = namedtuple('Experience', ['state', 'action', 'reward', 'next_state', 'done'])
 
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
@@ -38,16 +41,30 @@ def make_env(env_id, seed, idx, capture_video, run_name):
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = gym.make(env_id)
-        # 已在 AtariPreprocessor 中實作
-        # env = gym.wrappers.RecordEpisodeStatistics(env)
-        # env = gym.wrappers.ResizeObservation(env, (84, 84))
-        # env = gym.wrappers.GrayScaleObservation(env)
-        # env = gym.wrappers.FrameStack(env, 4)
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+
+        env = NoopResetEnv(env, noop_max=30)
+        env = MaxAndSkipEnv(env, skip=4)
+        env = EpisodicLifeEnv(env)
+        if "FIRE" in env.unwrapped.get_action_meanings():
+            env = FireResetEnv(env)
+        env = ClipRewardEnv(env)
+        env = gym.wrappers.ResizeObservation(env, (84, 84))
+        env = gym.wrappers.GrayscaleObservation(env)
+        env = gym.wrappers.FrameStackObservation(env, 4)
 
         env.action_space.seed(seed)
         return env
 
     return thunk
+
+def init_seed(seed: int):
+    """Initialize random seeds for reproducibility"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 def init_weights(m):
     """改進的權重初始化"""
@@ -379,14 +396,28 @@ class EnhancedDQNAgent:
         # Environment setup
         env_name = config.get('environment.name', 'ALE/Pong-v5')
         self.num_envs = config.get('experiment.num_envs', 1)
-        self.env = gym.make(env_name, render_mode="rgb_array")
-        self.num_actions = self.env.action_space.n
-        # self.env = gym.vector.SyncVectorEnv(
-        #     [make_env(env_name, self.seed + i, i, config.get('capture_video', False), self.exp_name) for i in range(self.num_envs)]
-        # )        
-        # self.num_actions = self.env.single_action_space.n
-        self.test_env = gym.make(env_name, render_mode="rgb_array")
-        self.preprocessor = AtariPreprocessor(config.get('environment.frame_stack', 4))
+        # self.env = gym.make(env_name, render_mode="rgb_array")
+        # self.num_actions = self.env.action_space.n
+        self.envs = gym.vector.SyncVectorEnv(
+            [make_env(env_name, self.seed + i, i, config.get('capture_video', False), self.exp_name) for i in range(self.num_envs)]
+        )        
+        self.num_actions = self.envs.single_action_space.n
+        self.test_env = make_env(env_name, 0, 0, True, self.exp_name+"_eval")()  # Single test environment for evaluation
+        # 單獨的測試環境
+        # self.test_env = gym.make(env_name, render_mode="rgb_array")
+        # # 為測試環境手動應用包裝器
+        # self.test_env = NoopResetEnv(self.test_env, noop_max=30)
+        # self.test_env = MaxAndSkipEnv(self.test_env, skip=4)
+        # self.test_env = EpisodicLifeEnv(self.test_env)
+        # if "FIRE" in self.test_env.unwrapped.get_action_meanings():
+        #     self.test_env = FireResetEnv(self.test_env)
+        # self.test_env = ClipRewardEnv(self.test_env)
+        # self.test_env = gym.wrappers.ResizeObservation(self.test_env, (84, 84))
+        # self.test_env = gym.wrappers.GrayscaleObservation(self.test_env)
+        # self.test_env = gym.wrappers.FrameStackObservation(self.test_env, 4)
+        # self.test_env = gym.vector.SyncVectorEnv(
+        #     [make_env(env_name, self.seed + i, i, config.get('capture_video', True), self.exp_name) for i in range(1)]
+        # )    
 
         # C51
         self.n_atoms = config.get('model.n_atoms', 51)
@@ -425,8 +456,8 @@ class EnhancedDQNAgent:
         self.per_replay_eps = config.get('per.eps', 1e-6)
         self.memory = PrioritizedReplayBuffer(
             capacity=self.buffer_size,
-            # obs_shape=self.env.single_observation_space.shape,
-            obs_shape=(4, 84, 84),  # Atari preprocessed shape
+            obs_shape=self.envs.single_observation_space.shape,
+            # obs_shape=(4, 84, 84),  # Atari preprocessed shape
             device=self.device,
             alpha=self.per_replay_alpha,
             beta=self.per_replay_beta,
@@ -676,31 +707,60 @@ class EnhancedDQNAgent:
     def evaluate(self) -> float:
         """Comprehensive evaluation"""
         eval_scores = []
+
+        # 設置為評估模式
+        self.q_net.eval()
         
         for _ in range(self.eval_episodes):
             obs, _ = self.test_env.reset()
-            state = self.preprocessor.reset(obs)
             done = False
             total_reward = 0
+            # step_count = 0
+            # max_steps = self.max_episode_steps
             
             while not done:
-                action = self.select_action(state, eval_mode=True)
+            # while not done and step_count < max_steps:
+                # 重置noise for evaluation（確保deterministic behavior）
+                self.q_net.reset_noise()
+                action = self.select_action(obs, single_action=True)  # Single action for evaluation
                 next_obs, reward, terminated, truncated, _ = self.test_env.step(action)
                 done = terminated or truncated
                 total_reward += reward
-                state = self.preprocessor.step(next_obs)
+                obs = next_obs
+                # step_count += 1
             
             eval_scores.append(total_reward)
         
+        self.q_net.train()
         return eval_scores
     
-    def select_action(self, state, eval_mode=False):
-        """Enhanced action selection with evaluation mode"""        
-        state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+    def select_action(self, obs, single_action=False):
+        """Enhanced action selection with evaluation mode"""    
+        state_tensor = torch.Tensor(obs).to(self.device)
         with torch.no_grad():
             q_dist = self.q_net(state_tensor)
             q_values = torch.sum(q_dist * self.q_net.support, dim=2)
-        return q_values.argmax().item() ## CleanRL中有轉到cpu
+
+        if single_action:
+            return q_values.argmax().item() ## single
+        else:
+            return q_values.argmax(dim=1).cpu().numpy() ## step-based
+    def select_action(self, obs, single_action=False):
+        """Enhanced action selection with proper dimension handling"""
+        state_tensor = torch.Tensor(obs).to(self.device)
+        
+        # 確保有正確的batch維度
+        if single_action and state_tensor.dim() == 3:  # (C, H, W) -> (1, C, H, W)
+            state_tensor = state_tensor.unsqueeze(0)
+        
+        with torch.no_grad():
+            q_dist = self.q_net(state_tensor)
+            q_values = torch.sum(q_dist * self.q_net.support, dim=2)
+
+        if single_action:
+            return q_values.argmax(dim=1).item()  # 使用dim=1而不是默認
+        else:
+            return q_values.argmax(dim=1).cpu().numpy()
 
     def run(self, total_steps: int = None):
         """Main training loop"""
@@ -716,94 +776,141 @@ class EnhancedDQNAgent:
         start_time = time.time()
 
         ## start the game
+        obs, _ = self.envs.reset(seed=self.seed)
+        
+        # 💾 手動追蹤每個環境的累積獎勵
+        episode_rewards = np.zeros(self.num_envs)
+        last_episode_reward = 0.0  # 用於logging
         while self.env_count < total_steps:
             # anneal PER beta to 1
             self.memory.beta = min(
                 1.0, self.per_replay_beta + self.env_count * (1.0 - self.per_replay_beta) / total_steps
             )
 
-            obs, _ = self.env.reset()
-            state = self.preprocessor.reset(obs)
-            done = False
-            episode_reward = 0
-            step_count = 0
+            actions = self.select_action(obs)
 
-            self.memory.n_step_buffer.clear()
+            next_obs, rewards, terminations, truncations, infos = self.envs.step(actions)
+            # # 🔍 調試：查看 infos 結構
+            # if self.env_count % 1000 == 0:  # 每1000步檢查一次
+            #     print(f"=== Debug Info at step {self.env_count} ===")
+            #     print(f"infos keys: {list(infos.keys()) if isinstance(infos, dict) else 'Not a dict'}")
+            #     print(f"infos type: {type(infos)}")
+            #     print(f"infos content: {infos}")
+            #     print(f"terminations: {terminations}")
+            #     print(f"truncations: {truncations}")
+            #     print("=" * 50)
+            # # Debugging: Print infos structure
+            ## === Debug Info at step 3000 ===
+            ## infos keys: ['lives', '_lives', 'episode_frame_number', '_episode_frame_number', 'frame_number', '_frame_number']
+            ## infos type: <class 'dict'>
+            ## infos content: {'lives': array([0, 0]), '_lives': array([ True,  True]), 'episode_frame_number': array([2572, 2272]), '_episode_frame_number': array([ True,  True]), 'frame_number': array([24633, 24531]), '_frame_number': array([ True,  True])}
+            ## terminations: [False False]
+            ## truncations: [False False]
 
-            while not done and step_count < self.max_episode_steps and self.env_count < total_steps:
-                # Select and execute action
-                action = self.select_action(state)
+            # # 替代的episode結束檢測
+            # for i in range(self.num_envs):
+            #     if terminations[i] or truncations[i]:
+            #         print(f"🎯 Environment {i} episode ended at step {self.env_count}")
+            #         print(f"Termination: {terminations[i]}, Truncation: {truncations[i]}")
 
-                # Environment step
-                next_obs, reward, terminated, truncated, _ = self.env.step(action)
-                done = terminated or truncated
-                next_state = self.preprocessor.step(next_obs)
+            # if "final_info" in infos:
+            #     for info in infos["final_info"]:
+            #         if info and "episode" in info:
+            #             episode_reward = info["episode"]["r"]
+            #             self.episode_count += 1
+            #             self.recent_scores.append(episode_reward)
+
+            #             print(f"[DEBUG] Episode finished: {self.episode_count} | "
+            #                   f"Reward: {episode_reward:.2f} | "
+            #                   f"Recent Avg: {np.mean(self.recent_scores):.2f} | "
+            #                   f"Best Score: {self.best_score:.2f}")
+
+            # 💰 累積每個環境的獎勵
+            episode_rewards += rewards
+
+            # 📊 Episode 結束檢測和處理 (修正版)
+            for i in range(self.num_envs):
+                if terminations[i] or truncations[i]:
+                    # 📈 記錄episode結束
+                    final_reward = episode_rewards[i]
+                    self.episode_count += 1
+                    self.recent_scores.append(final_reward)
+                    last_episode_reward = final_reward  # 用於logging
+                    
+                    # print(f"🎯 Episode {self.episode_count} completed at step {self.env_count}! Reward: {final_reward:.1f}")
+                    
+                    # 重置該環境的累積獎勵
+                    episode_rewards[i] = 0.0
+
+            # 🔄 處理 truncated episodes 的最終觀察
+            real_next_obs = next_obs.copy()
+            # 檢查infos中是否有final_observation
+            if "final_observation" in infos:
+                for idx, trunc in enumerate(truncations):
+                    if trunc:
+                        real_next_obs[idx] = infos["final_observation"][idx]
+            else:
+                # 如果沒有final_observation，檢查其他可能的keys
+                # print("Warning: 'final_observation' not found in infos. Available keys:", list(infos.keys()))
+                pass
+
+            # Store experiences in replay buffer
+            for i in range(self.num_envs):
+                self.memory.add(obs[i], actions[i], rewards[i], real_next_obs[i], terminations[i])
+
+            # Training step
+            training_metrics = None
+            if self.env_count > self.learning_starts:
+                if self.env_count % self.train_per_step == 0:
+                    training_metrics = self.train()
+
+            obs = next_obs
+            self.env_count += self.num_envs
+
+            # Logging
+            if self.env_count % self.log_frequency == 0:
+                elapsed_time = time.time() - start_time
+                fps = self.env_count / elapsed_time
+                print(f"[Step {self.env_count:>7}] Ep: {self.episode_count:>4} | "
+                    f"Reward: {last_episode_reward:>6.1f} | Beta: {self.memory.beta:.3f} | "
+                    f"FPS: {fps:.1f} | Buffer: {self.memory.size:>6}")
+                if training_metrics:
+                    self._log_metrics(self.env_count, last_episode_reward, training_metrics=training_metrics, fps=fps)
+
+            # Evaluation
+            if self.env_count % self.eval_frequency == 0 and self.env_count >= self.learning_starts:
+                eval_scores = self.evaluate()
+                avg_score = np.mean(eval_scores)
                 
-                # Store experience in buffer
-                self.memory.add(state, action, reward, next_state, done)
+                print(f"🎯 [Eval] Step {self.env_count} | Avg Score: {avg_score:.2f} ± {np.std(eval_scores):.2f}")
+                
+                # Update best score and save best model
+                if avg_score > self.best_score:
+                    self.best_score = avg_score
+                    self.save_checkpoint(self.env_count, eval_scores, 'best')
+                    print(f"🏆 New best score: {self.best_score:.2f}")
+                
+                # Log evaluation metrics
+                self._log_metrics(self.env_count, last_episode_reward, eval_scores)
+                
+                # Check early stopping
+                if avg_score >= target_score:
+                    print(f"🎉 Target score {target_score} reached! Early stopping...")
+                    self.save_checkpoint(self.env_count, eval_scores, 'final')
+                    return self.best_score
 
-                # Training step
-                if self.env_count > self.learning_starts:
-                    if self.env_count % self.train_per_step == 0:
-                        training_metrics = self.train()
-                    else:
-                        training_metrics = None
-                else:
-                    training_metrics = None
+            # Save milestone checkpoints
+            if self.env_count in milestone_steps:
+                eval_scores = self.evaluate()
+                self.save_checkpoint(self.env_count, eval_scores, 'milestone')
 
-                state = next_state
-                episode_reward += reward
-                self.env_count += 1
-                step_count += 1
+            # Regular checkpoint saving
+            if self.env_count % self.checkpoint_frequency == 0:
+                self.save_checkpoint(self.env_count, [], 'regular')
 
-                # Logging
-                if self.env_count % self.log_frequency == 0:
-                    elapsed_time = time.time() - start_time
-                    fps = self.env_count / elapsed_time
-                    print(f"[Step {self.env_count:>7}] Ep: {self.episode_count:>4} | "
-                          f"Reward: {episode_reward:>6.1f} | Beta: {self.memory.beta:.3f} | "
-                          f"FPS: {fps:.1f} | Buffer: {self.memory.size:>6}")
-                    
-                    if training_metrics:
-                        self._log_metrics(self.env_count, episode_reward, training_metrics=training_metrics, fps=fps)
-
-                # Evaluation
-                if self.env_count % self.eval_frequency == 0:
-                    eval_scores = self.evaluate()
-                    avg_score = np.mean(eval_scores)
-                    
-                    print(f"🎯 [Eval] Step {self.env_count} | Avg Score: {avg_score:.2f} ± {np.std(eval_scores):.2f}")
-                    
-                    # Update best score and save best model
-                    if avg_score > self.best_score:
-                        self.best_score = avg_score
-                        self.save_checkpoint(self.env_count, eval_scores, 'best')
-                        print(f"🏆 New best score: {self.best_score:.2f}")
-                    
-                    # Log evaluation metrics
-                    self._log_metrics(self.env_count, episode_reward, eval_scores)
-                    
-                    # Check early stopping
-                    if avg_score >= target_score:
-                        print(f"🎉 Target score {target_score} reached! Early stopping...")
-                        self.save_checkpoint(self.env_count, eval_scores, 'final')
-                        return self.best_score
-
-                # Save milestone checkpoints
-                if self.env_count in milestone_steps:
-                    eval_scores = self.evaluate()
-                    self.save_checkpoint(self.env_count, eval_scores, 'milestone')
-
-                # Regular checkpoint saving
-                if self.env_count % self.checkpoint_frequency == 0:
-                    self.save_checkpoint(self.env_count, [], 'regular')
-
-            # End of episode
-            self.episode_count += 1
-            self.recent_scores.append(episode_reward)
-            
         print(f"✅ Training completed! Best score: {self.best_score:.2f}")
         return self.best_score
+
 
 if __name__ == "__main__":
     # Load configuration
@@ -811,16 +918,11 @@ if __name__ == "__main__":
     
     # Set random seeds for reproducibility
     seed = config.get('seed', 42)
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-    
+    init_seed(seed)
     print(f"🎲 Random seed set to: {seed}")
     
     # Create and run agent
-    agent = DQNAgent(config)
+    agent = EnhancedDQNAgent(config)
     
     try:
         best_score = agent.run()
