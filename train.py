@@ -18,7 +18,7 @@ import traceback
 # Add src to path
 sys.path.append('src')
 
-from dqn_task3_5 import EnhancedDQNAgent
+from dqn_task3_10 import EnhancedDQNAgent
 from src.config import Config, load_config_from_args
 
 def setup_environment():
