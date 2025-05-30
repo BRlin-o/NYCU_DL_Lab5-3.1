@@ -228,11 +228,11 @@ class ModelEvaluator:
             'median_score': float(np.median(scores)),
             'q25_score': float(np.percentile(scores, 25)),
             'q75_score': float(np.percentile(scores, 75)),
-            'success_rate': float(np.sum(scores >= 19) / len(scores)),  # Task target
+            'success_rate': float(np.sum(scores >= 19) / len(scores)),  # Episodes with score >= 19
             'positive_rate': float(np.sum(scores > 0) / len(scores)),
             'evaluation_date': datetime.now().isoformat(),
             'model_path': self.model_path,
-            'model_type': 'Rainbow',
+            'model_type': 'Distributional DQN (C51)',
             'model_params': {
                 'n_atoms': self.n_atoms,
                 'v_min': self.v_min,
@@ -288,8 +288,8 @@ class ModelEvaluator:
         
         # Save JSON report
         report_path = os.path.join(output_dir, 'evaluation_report.json')
-        with open(report_path, 'w') as f:
-            json.dump(results, f, indent=2)
+        with open(report_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
         
         # Create visualization
         self._create_evaluation_plots(results, output_dir)
@@ -301,6 +301,10 @@ class ModelEvaluator:
     
     def _create_evaluation_plots(self, results: Dict[str, Any], output_dir: str):
         """Create evaluation visualization plots"""
+        # Configure matplotlib to handle missing fonts gracefully
+        import matplotlib
+        matplotlib.rcParams['font.family'] = ['DejaVu Sans', 'Arial', 'sans-serif']
+        
         plt.style.use('seaborn-v0_8')
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
         fig.suptitle(f'Distributional DQN Evaluation Report\nMean Score: {results["mean_score"]:.2f} ± {results["std_score"]:.2f}', fontsize=16)
@@ -358,7 +362,7 @@ Success Rate (≥19): {results['success_rate']*100:.1f}%
 Positive Rate (>0): {results['positive_rate']*100:.1f}%
 
 Task Assessment:
-Target Score (19): {'✅ ACHIEVED' if results['mean_score'] >= 19 else '❌ NOT REACHED'}
+Target Score (19): {'ACHIEVED' if results['mean_score'] >= 19 else 'NOT REACHED'}
 
 Model Parameters:
 Atoms: {results.get('model_params', {}).get('n_atoms', 'N/A')}
@@ -393,7 +397,7 @@ Avg Entropy: {dist_stats['mean_distribution_entropy']:.3f}
         """Create text summary report"""
         summary_path = os.path.join(output_dir, 'evaluation_summary.txt')
         
-        with open(summary_path, 'w') as f:
+        with open(summary_path, 'w', encoding='utf-8') as f:
             f.write("="*80 + "\n")
             f.write("DISTRIBUTIONAL DQN MODEL EVALUATION REPORT - TASK 3\n")
             f.write("="*80 + "\n\n")
@@ -423,12 +427,12 @@ Avg Entropy: {dist_stats['mean_distribution_entropy']:.3f}
             
             f.write("SUCCESS METRICS:\n")
             f.write("-" * 40 + "\n")
-            f.write(f"Success Rate (≥19):  {results['success_rate']*100:>7.1f}%\n")
+            f.write(f"Success Rate (>=19): {results['success_rate']*100:>7.1f}%\n")
             f.write(f"Positive Rate (>0):  {results['positive_rate']*100:>7.1f}%\n\n")
             
             f.write("TASK ASSESSMENT:\n")
             f.write("-" * 40 + "\n")
-            target_status = "✅ ACHIEVED" if results['mean_score'] >= 19 else "❌ NOT REACHED"
+            target_status = "ACHIEVED" if results['mean_score'] >= 19 else "NOT REACHED"
             f.write(f"Target Score (19):   {target_status}\n")
             
             if results['mean_score'] >= 19:
@@ -544,8 +548,8 @@ def main():
             
             # Save comparison results
             comparison_path = os.path.join(output_dir, 'checkpoint_comparison.json')
-            with open(comparison_path, 'w') as f:
-                json.dump(results, f, indent=2)
+            with open(comparison_path, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
             
             print(f"\n📊 Checkpoint comparison saved to: {comparison_path}")
             
@@ -606,8 +610,8 @@ def main():
             print(f"Model Type:      {results.get('model_type', 'Unknown')}")
             print(f"Episodes:        {results['num_episodes']}")
             print(f"Mean Score:      {results['mean_score']:.2f} ± {results['std_score']:.2f}")
-            print(f"Success Rate:    {results['success_rate']*100:.1f}% (≥19 score)")
-            print(f"Target Status:   {'✅ ACHIEVED' if results['mean_score'] >= 19 else '❌ NOT REACHED'}")
+            print(f"Success Rate:    {results['success_rate']*100:.1f}% (>=19 score)")
+            print(f"Target Status:   {'ACHIEVED' if results['mean_score'] >= 19 else 'NOT REACHED'}")
             print("="*60)
     
     except Exception as e:
